@@ -7,25 +7,13 @@ st.set_page_config(
     page_title="Frame Finder Portal", page_icon="👓", layout="wide"
 )
 
-# Directory to permanently store uploaded Excel/CSV files
+# Directory to permanently store Excel/CSV files
 DATA_DIR = "saved_frames_data"
 if not os.path.exists(DATA_DIR):
   os.makedirs(DATA_DIR)
 
-# File to store admin password permanently
-PASS_FILE = "admin_pass.txt"
-
-
-def get_current_password():
-  if os.path.exists(PASS_FILE):
-    with open(PASS_FILE, "r") as f:
-      return f.read().strip()
-  return "admin123"  # Default initial password
-
-
-def set_new_password(new_pass):
-  with open(PASS_FILE, "w") as f:
-    f.write(new_pass)
+# FIXED PERMANENT PASSWORD
+ADMIN_PASSWORD = "Office@880"
 
 
 # Helper function to load all saved files from disk
@@ -37,6 +25,9 @@ def load_all_saved_files():
   for fname in os.listdir(DATA_DIR):
     file_path = os.path.join(DATA_DIR, fname)
     if os.path.isfile(file_path):
+      # Skip hidden files or system files like .gitkeep
+      if fname.startswith("."):
+        continue
       try:
         if fname.endswith(".csv"):
           files_data[fname] = pd.read_csv(file_path)
@@ -67,9 +58,9 @@ with tab_model:
   current_files_data = load_all_saved_files()
 
   if not current_files_data:
-    st.info(
-        "No frame data sheets found yet. An administrator needs to upload them"
-        " in the **Frame Data (Admin)** tab."
+    st.warning(
+        "⚠️ No frame data sheets found in storage. An administrator needs to"
+        " add the Excel sheets to the repository folder (`saved_frames_data`)."
     )
   else:
     # Combine all stored dataframes for global searching
@@ -148,8 +139,8 @@ with tab_data:
   # Login Form if not authenticated
   if not st.session_state["admin_logged_in"]:
     st.warning(
-        "🔒 This section is restricted to administrators. Please enter the"
-        " password to manage files."
+        "🔒 This section is restricted. Enter password **Office@880** to"
+        " access."
     )
 
     with st.form("admin_login_form"):
@@ -157,12 +148,12 @@ with tab_data:
       submit_login = st.form_submit_button("Login")
 
       if submit_login:
-        if password_input == get_current_password():
+        if password_input == ADMIN_PASSWORD:
           st.session_state["admin_logged_in"] = True
           st.success("Logged in successfully!")
           st.rerun()
         else:
-          st.error("Incorrect password. Please try again.")
+          st.error("Incorrect password. Please use: Office@880")
   else:
     # Admin is logged in
     col_top1, col_top2 = st.columns([4, 1])
@@ -175,9 +166,12 @@ with tab_data:
 
     st.markdown("---")
     st.subheader("📁 Permanent Frame Data Management")
-    st.markdown(
-        "Upload new Excel (`.xlsx`, `.xls`) or CSV sheets. Files uploaded here"
-        " are saved permanently."
+    st.info(
+        "💡 **Important Note for Online Hosting:** Because cloud servers reset"
+        " periodically, files uploaded via the browser web form can occasionally"
+        " be wiped out. To make sure your Excel sheets are **never deleted**,"
+        " always upload/commit your Excel files directly into the"
+        " `saved_frames_data` folder inside your GitHub repository."
     )
 
     # File Uploader
@@ -219,29 +213,3 @@ with tab_data:
             st.rerun()
     else:
       st.info("No permanent data sheets found in storage.")
-
-    st.markdown("---")
-    st.subheader("🔑 Security Settings: Change Admin Password")
-
-    with st.form("change_password_form"):
-      current_pass_input = st.text_input(
-          "Current Password", type="password", key="cur_pass"
-      )
-      new_pass_input = st.text_input(
-          "New Password", type="password", key="new_pass"
-      )
-      confirm_pass_input = st.text_input(
-          "Confirm New Password", type="password", key="conf_pass"
-      )
-      submit_pass = st.form_submit_button("Update Password")
-
-      if submit_pass:
-        if current_pass_input != get_current_password():
-          st.error("Current password is incorrect.")
-        elif not new_pass_input:
-          st.error("New password cannot be empty.")
-        elif new_pass_input != confirm_pass_input:
-          st.error("New passwords do not match.")
-        else:
-          set_new_password(new_pass_input)
-          st.success("Admin password successfully updated!")
