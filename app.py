@@ -7,34 +7,30 @@ st.set_page_config(
     page_title="Frame Finder Portal", page_icon="👓", layout="wide"
 )
 
-# Directory to permanently store Excel/CSV files
-DATA_DIR = "saved_frames_data"
-if not os.path.exists(DATA_DIR):
-  os.makedirs(DATA_DIR)
+# Look directly in the main project directory where your files are uploaded
+DATA_DIR = "."
 
-# FIXED PERMANENT PASSWORD
+# FIXED SECURE ADMIN PASSWORD
 ADMIN_PASSWORD = "Office@880"
 
 
-# Helper function to load all saved files from disk
+# Helper function to load all Excel/CSV files from the repository
 def load_all_saved_files():
   files_data = {}
   if not os.path.exists(DATA_DIR):
     return files_data
 
   for fname in os.listdir(DATA_DIR):
-    file_path = os.path.join(DATA_DIR, fname)
-    if os.path.isfile(file_path):
-      # Skip hidden files or system files like .gitkeep
-      if fname.startswith("."):
-        continue
+    # Only pick up Excel or CSV files, ignore python scripts, text files, etc.
+    if fname.endswith((".xlsx", ".xls", ".csv")) and not fname.startswith("."):
+      file_path = os.path.join(DATA_DIR, fname)
       try:
         if fname.endswith(".csv"):
           files_data[fname] = pd.read_csv(file_path)
-        elif fname.endswith((".xlsx", ".xls")):
+        else:
           files_data[fname] = pd.read_excel(file_path)
       except Exception as e:
-        st.error(f"Could not read permanent file {fname}: {e}")
+        st.error(f"Could not read file {fname}: {e}")
   return files_data
 
 
@@ -54,16 +50,14 @@ tab_model, tab_data = st.tabs(["🔍 Frame Model", "📁 Frame Data (Admin)"])
 with tab_model:
   st.header("Search Frame Models")
 
-  # Load current active files from disk
   current_files_data = load_all_saved_files()
 
   if not current_files_data:
     st.warning(
-        "⚠️ No frame data sheets found in storage. An administrator needs to"
-        " add the Excel sheets to the repository folder (`saved_frames_data`)."
+        "⚠️ No Excel data sheets found. Please upload your Excel file to your"
+        " GitHub repository."
     )
   else:
-    # Combine all stored dataframes for global searching
     combined_df_list = []
     for fname, df in current_files_data.items():
       temp_df = df.copy()
@@ -72,7 +66,6 @@ with tab_model:
 
     master_df = pd.concat(combined_df_list, ignore_index=True)
 
-    # Search Inputs
     col1, col2 = st.columns([3, 1])
     with col1:
       search_query = st.text_input(
@@ -90,7 +83,6 @@ with tab_model:
       if selected_file_filter != "All Sheets":
         df_to_search = master_df[master_df["Source File"] == selected_file_filter]
 
-      # Perform deep search across all string columns case-insensitively
       mask = (
           df_to_search.astype(str)
           .apply(lambda col: col.str.contains(search_query, case=False, na=False))
@@ -132,15 +124,13 @@ with tab_model:
 with tab_data:
   st.header("Admin Control Panel")
 
-  # Initialize session state for login status
   if "admin_logged_in" not in st.session_state:
     st.session_state["admin_logged_in"] = False
 
-  # Login Form if not authenticated
   if not st.session_state["admin_logged_in"]:
     st.warning(
-        "🔒 This section is restricted. Enter password **Office@880** to"
-        " access."
+        "🔒 This section is restricted to administrators. Please enter your"
+        " credentials to continue."
     )
 
     with st.form("admin_login_form"):
@@ -153,9 +143,8 @@ with tab_data:
           st.success("Logged in successfully!")
           st.rerun()
         else:
-          st.error("Incorrect password. Please use: Office@880")
+          st.error("Incorrect password. Access denied.")
   else:
-    # Admin is logged in
     col_top1, col_top2 = st.columns([4, 1])
     with col_top1:
       st.success("🔓 Logged in as Administrator")
@@ -165,51 +154,25 @@ with tab_data:
         st.rerun()
 
     st.markdown("---")
-    st.subheader("📁 Permanent Frame Data Management")
+    st.subheader("📁 Permanent Inventory Files")
     st.info(
-        "💡 **Important Note for Online Hosting:** Because cloud servers reset"
-        " periodically, files uploaded via the browser web form can occasionally"
-        " be wiped out. To make sure your Excel sheets are **never deleted**,"
-        " always upload/commit your Excel files directly into the"
-        " `saved_frames_data` folder inside your GitHub repository."
+        "💡 **How to Add Files Permanently:** Just upload your Excel file"
+        " directly into the main page of your GitHub repository. The portal"
+        " will automatically detect it and it will never be deleted."
     )
 
-    # File Uploader
-    uploaded_files = st.file_uploader(
-        "Upload Excel/CSV Sheets",
-        type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True,
-    )
-
-    if uploaded_files:
-      for uploaded_file in uploaded_files:
-        save_path = os.path.join(DATA_DIR, uploaded_file.name)
-        try:
-          with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-          st.success(f"Successfully saved permanent file: {uploaded_file.name}")
-        except Exception as e:
-          st.error(f"Error saving {uploaded_file.name}: {e}")
-      st.rerun()
-
-    # Display active files and allow removal
     active_files = load_all_saved_files()
     if active_files:
-      st.subheader("Stored Portal Files")
-
+      st.subheader("Currently Loaded Files in Portal")
       for fname in list(active_files.keys()):
-        col_a, col_b, col_c = st.columns([3, 2, 1])
+        col_a, col_b = st.columns([3, 2])
         with col_a:
           st.text(f"📄 {fname}")
         with col_b:
           shape = active_files[fname].shape
           st.text(f"Rows: {shape[0]}, Cols: {shape[1]}")
-        with col_c:
-          if st.button("Delete", key=f"del_{fname}"):
-            file_to_remove = os.path.join(DATA_DIR, fname)
-            if os.path.exists(file_to_remove):
-              os.remove(file_to_remove)
-            st.success(f"Deleted {fname}")
-            st.rerun()
     else:
-      st.info("No permanent data sheets found in storage.")
+      st.warning(
+          "No Excel files found in your repository. Upload an `.xlsx` file to"
+          " your GitHub main page."
+      )
