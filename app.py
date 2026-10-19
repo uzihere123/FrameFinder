@@ -2,270 +2,225 @@ import os
 import pandas as pd
 import streamlit as st
 
-# Page Configuration
+# --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Frame Finder Portal", page_icon="👓", layout="wide"
+    page_title="Frame Finder - Inventory Portal",
+    page_icon="👓",
+    layout="wide",
 )
 
-# Directories
-DATA_DIR = "."
+# --- DIRECTORIES & FILES ---
 IMG_DIR = "images"
-PASS_FILE = "admin_pass.txt"
-
-# Ensure images directory exists locally
-if not os.path.exists(IMG_DIR):
-  os.makedirs(IMG_DIR)
+ADMIN_PASS_FILE = "admin_pass.txt"
+DEFAULT_ADMIN_PASS = "Office@880"
 
 
-# Helper function for password management
-def get_current_password():
-  if os.path.exists(PASS_FILE):
-    with open(PASS_FILE, "r") as f:
-      return f.read().strip()
-  return "Office@880"  # Default secure password
+# --- PASSWORD MANAGEMENT ---
+def get_admin_password():
+  if os.path.exists(ADMIN_PASS_FILE):
+    with open(ADMIN_PASS_FILE, "r") as f:
+      pwd = f.read().strip()
+      if pwd:
+        return pwd
+  return DEFAULT_ADMIN_PASS
 
 
-def set_new_password(new_pass):
-  with open(PASS_FILE, "w") as f:
-    f.write(new_pass)
+def set_admin_password(new_password):
+  with open(ADMIN_PASS_FILE, "w") as f:
+    f.write(new_password.strip())
 
 
-# Helper function to load all Excel/CSV inventory files
-def load_all_saved_files():
-  files_data = {}
-  if not os.path.exists(DATA_DIR):
-    return files_data
-
-  for fname in os.listdir(DATA_DIR):
-    if fname.endswith((".xlsx", ".xls", ".csv")) and not fname.startswith("."):
-      file_path = os.path.join(DATA_DIR, fname)
+# --- DATA LOADING ---
+@st.cache_data
+def load_inventory_data():
+  all_data = []
+  # Scan root directory for Excel and CSV files
+  for file in os.listdir("."):
+    if file.endswith((".xlsx", ".xls")):
       try:
-        if fname.endswith(".csv"):
-          files_data[fname] = pd.read_csv(file_path)
-        else:
-          files_data[fname] = pd.read_excel(file_path)
+        df = pd.read_excel(file)
+        df["Source_File"] = file
+        all_data.append(df)
       except Exception as e:
-        st.error(f"Could not read file {fname}: {e}")
-  return files_data
+        st.error(f"Error loading {file}: {e}")
+    elif file.endswith(".csv"):
+      try:
+        df = pd.read_csv(file)
+        df["Source_File"] = file
+        all_data.append(df)
+      except Exception as e:
+        st.error(f"Error loading {file}: {e}")
+
+  if all_data:
+    combined_df = pd.concat(all_data, ignore_index=True)
+    # Standardize column names string strip
+    combined_df.columns = [str(c).strip() for c in combined_df.columns]
+    return combined_df
+  return pd.DataFrame()
 
 
-# Helper function to find a matching image file in the 'images' folder or root
+# --- IMAGE MATCHER (SKU BASED & RECURSIVE BATCH SCAN) ---
 def find_image_for_code(code_str):
-  if not code_str:
+  if not code_str or pd.isna(code_str):
     return None
+
   clean_code = str(code_str).strip()
   extensions = [".jpg", ".jpeg", ".png", ".JPG", ".PNG", ".webp"]
 
-  for ext in extensions:
-    # Check inside the 'images' folder first (Best Practice)
-    img_path = os.path.join(IMG_DIR, f"{clean_code}{ext}")
-    if os.path.exists(img_path):
-      return img_path
-    # Fallback to root folder
-    root_path = os.path.join(DATA_DIR, f"{clean_code}{ext}")
-    if os.path.exists(root_path):
-      return root_path
+  # Recursively scan 'images' root and all batch subfolders (e.g., batch_001, batch_002)
+  if os.path.exists(IMG_DIR):
+    for root, dirs, files in os.walk(IMG_DIR):
+      for ext in extensions:
+        target_filename = f"{clean_code}{ext}"
+        if target_filename in files:
+          return os.path.join(root, target_filename)
 
   return None
 
 
-# App Title
-st.title("👓 Frame Finder Portal")
+# --- MAIN APP LAYOUT ---
+st.title("👓 Frame Finder Inventory Portal")
 st.markdown(
-    "Search frame models instantly with visual previews or log into the Admin"
-    " panel."
+    "Search through combined inventory databases and view dynamic SKU-based"
+    " product previews."
 )
 
-# Tabs Configuration
-tab_model, tab_data = st.tabs(["🔍 Frame Model", "📁 Frame Data (Admin)"])
+df = load_inventory_data()
 
-# ==========================================
-# TAB 1: FRAME MODEL (Public Deep Search + Images)
-# ==========================================
-with tab_model:
-  st.header("Search Frame Models & Preview Images")
+if df.empty:
+  st.warning(
+      "⚠️ No inventory files (.xlsx, .xls, .csv) found in the root repository"
+      " directory. Please add your spreadsheets."
+  )
+else:
+  # Sidebar Navigation & Admin Login
+  st.sidebar.title("Navigation")
+  app_mode = st.sidebar.radio("Go to", ["🔍 Search Inventory", "🔒 Admin Panel"])
 
-  current_files_data = load_all_saved_files()
+  if app_mode == "🔍 Search Inventory":
+    st.subheader("Public Inventory Search")
 
-  if not current_files_data:
-    st.warning(
-        "⚠️ No Excel data sheets found. Please upload your Excel file to your"
-        " GitHub repository."
+    # Source File Filter
+    source_files = ["All Files"] + list(df["Source_File"].unique())
+    selected_source = st.sidebar.selectbox(
+        "Filter by Inventory File", source_files
     )
-  else:
-    combined_df_list = []
-    for fname, df in current_files_data.items():
-      temp_df = df.copy()
-      temp_df["Source File"] = fname
-      combined_df_list.append(temp_df)
 
-    master_df = pd.concat(combined_df_list, ignore_index=True)
+    filtered_df = df.copy()
+    if selected_source != "All Files":
+      filtered_df = filtered_df[
+          filtered_df["Source_File"] == selected_source
+      ]
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-      search_query = st.text_input(
-          "Enter Model Number, SKU, or Keyword (Partial match supported, e.g.,"
-          " 'rd811'):",
-          "",
-      )
-    with col2:
-      selected_file_filter = st.selectbox(
-          "Filter by Source File", ["All Sheets"] + list(current_files_data.keys())
-      )
+    # Search Query Input
+    search_query = st.text_input(
+        "Search by SKU, Model, Brand, or Keywords...", ""
+    )
 
+    search_results = filtered_df
     if search_query:
-      df_to_search = master_df
-      if selected_file_filter != "All Sheets":
-        df_to_search = master_df[master_df["Source File"] == selected_file_filter]
+      # Global fuzzy/text matching across columns
+      mask = filtered_df.astype(str).apply(
+          lambda x: x.str.contains(search_query, case=False, na=False)
+      ).any(axis=1)
+      search_results = filtered_df[mask]
 
-      mask = (
-          df_to_search.astype(str)
-          .apply(lambda col: col.str.contains(search_query, case=False, na=False))
-          .any(axis=1)
-      )
+    st.markdown(f"**Found {len(search_results)} matching records.**")
 
-      search_results = df_to_search[mask]
+    if not search_results.empty:
+      # Split layout: Table on the left, Image Preview on the right
+      table_col, img_col = st.columns([2, 1])
 
-      st.markdown(f"### Search Results ({len(search_results)} found)")
+      with table_col:
+        st.dataframe(search_results, use_container_width=True, height=450)
 
-      if not search_results.empty:
-        table_col, img_col = st.columns([2, 1])
-
-        with table_col:
-          st.dataframe(search_results, use_container_width=True)
-
-          csv_export = search_results.to_csv(index=False).encode("utf-8")
-          st.download_button(
-              label="📥 Export Search Results as CSV",
-              data=csv_export,
-              file_name="frame_search_results.csv",
-              mime="text/csv",
-          )
-
-        with img_col:
-          st.markdown("### 🖼️ Visual Preview")
-          possible_code_cols = [
-              c
-              for c in search_results.columns
-              if any(
-                  k in c.lower()
-                  for k in ["sku", "model", "code", "item", "article"]
-              )
-          ]
-
-          matched_img = None
-          if possible_code_cols:
-            sample_code = search_results.iloc[0][possible_code_cols[0]]
-            matched_img = find_image_for_code(sample_code)
-
-          if not matched_img:
-            matched_img = find_image_for_code(search_query)
-
-          if matched_img:
-            st.image(
-                matched_img,
-                caption=f"Image for: {os.path.basename(matched_img)}",
-                use_container_width=True,
-            )
-          else:
-            st.info(
-                "No matching image found in the `images` folder. (Tip: Ensure"
-                " your image filename matches the SKU or Model number exactly,"
-                " e.g., `RD811.jpg`)"
-            )
-      else:
-        st.warning(
-            f"No matching results found for '{search_query}'. Try checking your"
-            " spelling or typing a shorter segment."
+        # CSV Download button for results
+        csv_data = search_results.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download Search Results as CSV",
+            data=csv_data,
+            file_name="search_results.csv",
+            mime="text/csv",
         )
+
+      with img_col:
+        st.markdown("### 🖼️ Visual Preview")
+
+        matched_img = None
+        sku_value = None
+
+        # 1. Prioritize looking up by explicit 'SKU' column value from the first row
+        sku_cols = [c for c in search_results.columns if "sku" in c.lower()]
+        if sku_cols:
+          sku_value = search_results.iloc[0][sku_cols[0]]
+          matched_img = find_image_for_code(sku_value)
+
+        # 2. Fallback: Search using the literal search query text if SKU match fails
+        if not matched_img and search_query:
+          matched_img = find_image_for_code(search_query)
+
+        if matched_img:
+          st.image(
+              matched_img,
+              caption=(
+                  f"Matched SKU: {sku_value or search_query}"
+                  f" ({os.path.basename(matched_img)})"
+              ),
+              use_container_width=True,
+          )
+        else:
+          st.info(
+              "ℹ️ No image found matching this SKU. Ensure image filenames in"
+              " batch folders match the SKU exactly (e.g., `100082.jpg`)."
+          )
     else:
-      st.markdown(
-          "_Type a model number or keyword above to instantly search across all"
-          " permanent files._"
+      st.info("No records match your search criteria.")
+
+  elif app_mode == "🔒 Admin Panel":
+    st.subheader("Administrator Portal")
+
+    # Session state initialization for login
+    if "admin_logged_in" not in st.session_state:
+      st.session_state.admin_logged_in = False
+
+    current_admin_pass = get_admin_password()
+
+    if not st.session_state.admin_logged_in:
+      password_input = st.text_input(
+          "Enter Admin Password", type="password", key="admin_pwd_input"
       )
-
-      with st.expander("📊 Preview Complete Combined Inventory"):
-        st.dataframe(master_df, use_container_width=True)
-
-
-# ==========================================
-# TAB 2: FRAME DATA (Password-Protected Admin)
-# ==========================================
-with tab_data:
-  st.header("Admin Control Panel")
-
-  if "admin_logged_in" not in st.session_state:
-    st.session_state["admin_logged_in"] = False
-
-  if not st.session_state["admin_logged_in"]:
-    st.warning(
-        "🔒 This section is restricted to administrators. Please enter your"
-        " credentials to continue."
-    )
-
-    with st.form("admin_login_form"):
-      password_input = st.text_input("Admin Password", type="password")
-      submit_login = st.form_submit_button("Login")
-
-      if submit_login:
-        if password_input == get_current_password():
-          st.session_state["admin_logged_in"] = True
+      if st.button("Login"):
+        if password_input == current_admin_pass:
+          st.session_state.admin_logged_in = True
           st.success("Logged in successfully!")
           st.rerun()
         else:
-          st.error("Incorrect password. Access denied.")
-  else:
-    col_top1, col_top2 = st.columns([4, 1])
-    with col_top1:
+          st.error("Incorrect password.")
+    else:
       st.success("🔓 Logged in as Administrator")
-    with col_top2:
+
       if st.button("Logout"):
-        st.session_state["admin_logged_in"] = False
+        st.session_state.admin_logged_in = False
         st.rerun()
 
-    st.markdown("---")
-    st.subheader("📁 Permanent Inventory & Asset Files")
-    st.info(
-        "💡 **How It Works:** Place your Excel files in the main repository"
-        " folder and your compressed pictures inside an **`images`** folder on"
-        " GitHub. They will load permanently and never get deleted."
-    )
-
-    active_files = load_all_saved_files()
-    if active_files:
-      st.subheader("Currently Loaded Data Files")
-      for fname in list(active_files.keys()):
-        col_a, col_b = st.columns([3, 2])
-        with col_a:
-          st.text(f"📄 {fname}")
-        with col_b:
-          shape = active_files[fname].shape
-          st.text(f"Rows: {shape[0]}, Cols: {shape[1]}")
-    else:
-      st.warning("No Excel files found in your repository.")
-
-    st.markdown("---")
-    st.subheader("🔑 Security Settings: Change Admin Password")
-
-    with st.form("change_password_form"):
-      current_pass_input = st.text_input(
-          "Current Password", type="password", key="cur_pass"
+      st.markdown("---")
+      st.markdown("### 🛠️ Admin Controls & File Management")
+      st.write(
+          "Upload new inventory sheets to the root directory or update system"
+          " settings below."
       )
-      new_pass_input = st.text_input(
-          "New Password", type="password", key="new_pass"
-      )
-      confirm_pass_input = st.text_input(
-          "Confirm New Password", type="password", key="conf_pass"
-      )
-      submit_pass = st.form_submit_button("Update Password")
 
-      if submit_pass:
-        if current_pass_input != get_current_password():
-          st.error("Current password is incorrect.")
-        elif not new_pass_input:
-          st.error("New password cannot be empty.")
-        elif new_pass_input != confirm_pass_input:
-          st.error("New passwords do not match.")
-        else:
-          set_new_password(new_pass_input)
-          st.success("Admin password successfully updated!")
+      # Password Change Section
+      with st.expander("🔑 Change Admin Password"):
+        new_pass = st.text_input(
+            "New Admin Password", type="password", key="new_pwd"
+        )
+        confirm_pass = st.text_input(
+            "Confirm New Password", type="password", key="conf_pwd"
+        )
+        if st.button("Update Password"):
+          if new_pass and new_pass == confirm_pass:
+            set_admin_password(new_pass)
+            st.success("Admin password updated successfully!")
+          else:
+            st.error("Passwords do not match or field is empty.")
