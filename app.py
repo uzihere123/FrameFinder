@@ -34,7 +34,6 @@ def set_admin_password(new_password):
 @st.cache_data
 def load_inventory_data():
   all_data = []
-  # Scan root directory for Excel and CSV files
   for file in os.listdir("."):
     if file.endswith((".xlsx", ".xls")):
       try:
@@ -53,7 +52,6 @@ def load_inventory_data():
 
   if all_data:
     combined_df = pd.concat(all_data, ignore_index=True)
-    # Standardize column names string strip
     combined_df.columns = [str(c).strip() for c in combined_df.columns]
     return combined_df
   return pd.DataFrame()
@@ -67,7 +65,6 @@ def find_image_for_code(code_str):
   clean_code = str(code_str).strip()
   extensions = [".jpg", ".jpeg", ".png", ".JPG", ".PNG", ".webp"]
 
-  # Recursively scan 'images' root and all batch subfolders (e.g., batch_001, batch_002)
   if os.path.exists(IMG_DIR):
     for root, dirs, files in os.walk(IMG_DIR):
       for ext in extensions:
@@ -81,16 +78,15 @@ def find_image_for_code(code_str):
 # --- MAIN APP LAYOUT ---
 st.title("👓 Frame Finder Inventory Portal")
 st.markdown(
-    "Search through combined inventory databases and view dynamic SKU-based"
-    " product previews."
+    "Search inventory by model number, view SKUs, and click the image icon to"
+    " inspect individual product photos."
 )
 
 df = load_inventory_data()
 
 if df.empty:
   st.warning(
-      "⚠️ No inventory files (.xlsx, .xls, .csv) found in the root repository"
-      " directory. Please add your spreadsheets."
+      "⚠️ No inventory files (.xlsx, .xls, .csv) found in the root directory."
   )
 else:
   # Sidebar Navigation & Admin Login
@@ -112,14 +108,13 @@ else:
           filtered_df["Source_File"] == selected_source
       ]
 
-    # Search Query Input
+    # Search Query Input (Model Number / Keywords / SKU)
     search_query = st.text_input(
-        "Search by SKU, Model, Brand, or Keywords...", ""
+        "Search by Model Number, SKU, or Brand...", ""
     )
 
     search_results = filtered_df
     if search_query:
-      # Global fuzzy/text matching across columns
       mask = filtered_df.astype(str).apply(
           lambda x: x.str.contains(search_query, case=False, na=False)
       ).any(axis=1)
@@ -128,13 +123,64 @@ else:
     st.markdown(f"**Found {len(search_results)} matching records.**")
 
     if not search_results.empty:
-      # Split layout: Table on the left, Image Preview on the right
-      table_col, img_col = st.columns([2, 1])
+      # Identify SKU column dynamically
+      sku_cols = [c for c in search_results.columns if "sku" in c.lower()]
+      sku_col = sku_cols[0] if sku_cols else search_results.columns[0]
 
-      with table_col:
-        st.dataframe(search_results, use_container_width=True, height=450)
+      # Initialize session state for selected SKU image preview if not exists
+      if "active_preview_sku" not in st.session_state:
+        st.session_state.active_preview_sku = None
 
-        # CSV Download button for results
+      # Layout: Table/List on left, Clicked SKU Image Preview on right
+      left_col, right_col = st.columns([2, 1])
+
+      with left_col:
+        st.markdown(
+            "#### 📋 Search Results (Click '🖼️ View' next to any SKU)"
+        )
+
+        # Display full results dataframe for reference
+        st.dataframe(search_results, use_container_width=True, height=300)
+
+        st.markdown("---")
+        st.markdown("#### 🔍 SKU-by-SKU Image Inspection List")
+
+        # Limit listing to avoid browser lag if a search returns thousands of rows
+        max_display = 100
+        display_subset = search_results.head(max_display)
+        if len(search_results) > max_display:
+          st.info(
+              f"Showing first {max_display} records for interactive inspection."
+              " Refine your search for specific models."
+          )
+
+        # Render interactive rows with a button/icon in front of each SKU
+        for idx, row in display_subset.iterrows():
+          current_sku = row[sku_col]
+          # Try to grab model or description for label context
+          model_cols = [
+              c for c in search_results.columns if "model" in c.lower()
+          ]
+          model_val = (
+              str(row[model_cols[0]]) if model_cols else "N/A"
+          )
+
+          cols = st.metric_col if hasattr(st, "metric_col") else st.columns([1, 3, 2])
+          col_btn, col_sku, col_model = st.columns([1, 2, 3])
+
+          with col_btn:
+            if st.button("🖼️ View", key=f"btn_{idx}_{current_sku}"):
+              st.session_state.active_preview_sku = current_sku
+
+          with col_sku:
+            st.markdown(f"**SKU:** `{current_sku}`")
+
+          with col_model:
+            st.text(f"Model: {model_val}")
+
+          st.markdown("<hr style='margin:5px 0;'>", unsafe_allow_html=True)
+
+        # CSV Download button
         csv_data = search_results.to_csv(index=False).encode("utf-8")
         st.download_button(
             label="📥 Download Search Results as CSV",
@@ -143,35 +189,30 @@ else:
             mime="text/csv",
         )
 
-      with img_col:
-        st.markdown("### 🖼️ Visual Preview")
+      with right_col:
+        st.markdown("### 🖼️ Selected SKU Preview")
 
-        matched_img = None
-        sku_value = None
+        if st.session_state.active_preview_sku:
+          target_sku = st.session_state.active_preview_sku
+          matched_img = find_image_for_code(target_sku)
 
-        # 1. Prioritize looking up by explicit 'SKU' column value from the first row
-        sku_cols = [c for c in search_results.columns if "sku" in c.lower()]
-        if sku_cols:
-          sku_value = search_results.iloc[0][sku_cols[0]]
-          matched_img = find_image_for_code(sku_value)
+          st.markdown(f"**Active SKU:** `{target_sku}`")
 
-        # 2. Fallback: Search using the literal search query text if SKU match fails
-        if not matched_img and search_query:
-          matched_img = find_image_for_code(search_query)
-
-        if matched_img:
-          st.image(
-              matched_img,
-              caption=(
-                  f"Matched SKU: {sku_value or search_query}"
-                  f" ({os.path.basename(matched_img)})"
-              ),
-              use_container_width=True,
-          )
+          if matched_img:
+            st.image(
+                matched_img,
+                caption=f"Image for SKU: {target_sku} ({os.path.basename(matched_img)})",
+                use_container_width=True,
+            )
+          else:
+            st.warning(
+                f"⚠️ Image file for SKU `{target_sku}` not found in batch"
+                " folders."
+            )
         else:
           st.info(
-              "ℹ️ No image found matching this SKU. Ensure image filenames in"
-              " batch folders match the SKU exactly (e.g., `100082.jpg`)."
+              "👈 Click the **🖼️ View** button next to any SKU on the left to"
+              " inspect its picture here."
           )
     else:
       st.info("No records match your search criteria.")
@@ -179,7 +220,6 @@ else:
   elif app_mode == "🔒 Admin Panel":
     st.subheader("Administrator Portal")
 
-    # Session state initialization for login
     if "admin_logged_in" not in st.session_state:
       st.session_state.admin_logged_in = False
 
@@ -205,12 +245,7 @@ else:
 
       st.markdown("---")
       st.markdown("### 🛠️ Admin Controls & File Management")
-      st.write(
-          "Upload new inventory sheets to the root directory or update system"
-          " settings below."
-      )
 
-      # Password Change Section
       with st.expander("🔑 Change Admin Password"):
         new_pass = st.text_input(
             "New Admin Password", type="password", key="new_pwd"
